@@ -12,6 +12,10 @@
 // for convenience
 using json = nlohmann::json;
 
+using namespace std;
+
+const double Lf = 2.67;
+
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
@@ -90,26 +94,65 @@ int main() {
           double px = j[1]["x"];
           double py = j[1]["y"];
           double psi = j[1]["psi"];
-          double v = j[1]["speed"];
+          double v = j[1]["speed"];          
+          double psi_unity = j[1]["psi_unity"];
+          double steering_angle = j[1]["steering_angle"];
+
+          //rotates counterclockwise 90 degree, to convert from polar navigation
+          double psi_rotated = psi_unity - (pi() / 2);
+
+
+          Eigen::VectorXd xvals(ptsx.size());
+          Eigen::VectorXd yvals(ptsx.size());
+
+          for (int i = 0; i < ptsx.size(); i++) {
+            //difference between the points and the vehicle position, in order to shift the 
+            //trajectory to the right place (center of track)
+            double delta_x = ptsx[i] - px;
+            double delta_y = ptsy[i] - py;
+
+            //tranformation from map system to vehicle coordinate system
+            xvals(i) = cos(psi_rotated) * delta_x - sin(psi_rotated) * delta_y;
+            yvals(i) = sin(psi_rotated) * delta_x + cos(psi_rotated) * delta_y;
+          }
+
+          auto coeffs = polyfit(xvals, yvals, 3);
+          double x = 0;
+          double y = 0;
+          // calculate the cross track error
+          double cte = polyeval(coeffs, x);
+
+          // calculate the orientation error
+          //the seconde coefficiente is the direction
+          double epsi = -atan(coeffs[1]);
+
+          Eigen::VectorXd state(6);
+          state << x, y, 0, v, cte, epsi;
 
           /*
-          * TODO: Calculate steering angle and throttle using MPC.
-          *
+          * Calculate steering angle and throttle using MPC.
           * Both are in between [-1, 1].
-          *
           */
-          double steer_value;
-          double throttle_value;
-
+          vector<double> vars = mpc.Solve(state, coeffs);
+          double steer_value = vars[0];
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
           // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
-          msgJson["steering_angle"] = steer_value;
-          msgJson["throttle"] = throttle_value;
+          msgJson["steering_angle"] = steer_value / (deg2rad(25) * Lf);
+          msgJson["throttle"] = vars[1];
 
           //Display the MPC predicted trajectory 
           vector<double> mpc_x_vals;
           vector<double> mpc_y_vals;
+
+          for (int i = 2; i < vars.size(); i++) {
+            double point = vars[i];
+            if (i % 2 == 0) {
+              mpc_x_vals.push_back(point);
+            } else {
+              mpc_y_vals.push_back(point);
+            }
+          }
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Green line
@@ -117,9 +160,14 @@ int main() {
           msgJson["mpc_x"] = mpc_x_vals;
           msgJson["mpc_y"] = mpc_y_vals;
 
-          //Display the waypoints/reference line
+          //Display the waypoints/reference line          
           vector<double> next_x_vals;
           vector<double> next_y_vals;
+
+          for (int x = 1; x < 20; x++) {
+            next_x_vals.push_back(x * 2.5);
+            next_y_vals.push_back(polyeval(coeffs, x * 2.5));
+          }
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
